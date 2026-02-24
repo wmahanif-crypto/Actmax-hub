@@ -1,0 +1,3 @@
+@echo off
+cd C:\actmax-web
+npm run start

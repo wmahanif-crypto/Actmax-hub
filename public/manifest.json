@@ -1,0 +1,21 @@
+{
+  "name": "Actmax HUB",
+  "short_name": "Actmax HUB",
+  "description": "Portal for Actmax employees to access internal tools and resources.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#ef4444",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "appId": "com.actmax.hub",
+  "appName": "actmax-web",
+  "webDir": "out",
+  "server": {
+    "allowNavigation": ["192.168.40.23"],
+    "cleartext": true,
+    "androidScheme": "http"
+  },
+  "plugins": {
+    "CapacitorHttp"
+    : {
+      "enabled": true
+    }
+  }
+}

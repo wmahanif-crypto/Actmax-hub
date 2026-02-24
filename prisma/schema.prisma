@@ -1,0 +1,34 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Ticket {
+  id              String   @id @default(cuid())
+  subject         String
+  specificProblem String
+  description     String
+  category        String   // 'SERVICE' atau 'REQUEST'
+  status          String   @default("PENDING_HOD") 
+  priority        String   @default("NORMAL")
+
+  // SLA Logic
+  dueDate         DateTime 
+  isOverdue       Boolean  @default(false)
+
+  // User Info
+  userId          String
+  userName        String
+  userDept        String
+
+  // Workflow Approval
+  hodApproved     Boolean  @default(false)
+  ceoApproved     Boolean  @default(false) 
+  adminApproved   Boolean  @default(false)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
