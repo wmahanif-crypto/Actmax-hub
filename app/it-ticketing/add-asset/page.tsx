@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { toast } from 'sonner';
 
 // (moved inside component to avoid calling hooks at top-level)
 
@@ -89,7 +90,7 @@ export default function AddAsset() {
     category: 'Desktop',
     model: '',
     serial_number: '',
-    status: 'Spare', // Default lock to Spare
+    status: 'Spare',
     warranty_end: '',
     ram: '',
     storage: ''
@@ -152,6 +153,7 @@ useEffect(() => {
 const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   setLoading(true);
+
   
   const now = new Date().toISOString();
   
@@ -194,12 +196,23 @@ const handleSubmit = async (e: React.FormEvent) => {
       console.error("Failed to save activity log:", logError.message);
     }
 
-    alert("Asset Registered as Spare & Logged!");
-    router.push('/it-ticketing');
+toast.success("Asset Registered as Spare!");
+setFormData({
+  it_tagging: '',
+  category: 'Desktop',
+  model: '',
+  serial_number: '',
+  status: 'Spare',
+  warranty_end: '',
+  ram: '',
+  storage: ''
+});
+setNoSN(false);
+setLoading(false);
 
   } catch (error: any) {
-    console.error("Error:", error.message);
-    alert("Error: " + (error.message || "Failed to register asset"));
+    toast.error("Error:", error.message);
+    toast.error("Error: " + (error.message || "Failed to register asset"));
   } finally {
     setLoading(false);
   }

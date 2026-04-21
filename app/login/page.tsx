@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import { supabase } from '@/lib/supabase';
-import { CapacitorHttp } from '@capacitor/core';    
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -13,69 +12,53 @@ export default function LoginPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const router = useRouter();
 
-// NOTE: server-only middleware (express/cors) removed — this is a client component.
-
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setStatusMessage({ type: '', text: '' });
 
-       try {
-      // 1. Check LDAP Authentication (AD Login) menggunakan CapacitorHttp
-const response = await CapacitorHttp.post({
-  url: 'http://192.168.40.23:3000/api/auth/ldap/',
-  headers: { 'Content-Type': 'application/json' },
-  data: { username, password },
-});
+    try {
+      const response = await fetch('/api/auth/ldap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
 
-      // CapacitorHttp menyimpan status code dalam 'status' dan data dalam 'data'
-      if (response.status !== 200 && response.status !== 201) {
-        setStatusMessage({ 
-          type: 'error', 
-          text: `LDAP service error: ${response.status}` 
+      const result = await response.json();
+
+      if (!response.ok || !result?.success) {
+        setStatusMessage({
+          type: 'error',
+          text: result?.message || 'Invalid credentials. Sila cuba semula.',
         });
         return;
       }
 
-      const result = response.data; // Response JSON terus ada di sini
+      const { data: emp, error: dbError } = await supabase
+        .from('Employees')
+        .select('userName, userRole, userDept')
+        .eq('userLoginID', username)
+        .single();
 
-      if (result && result.success) {
-        // 2. Tarik info tambahan dari table Employees dkt Supabase guna userLoginID
-        const { data: emp, error: dbError } = await supabase
-          .from('Employees')
-          .select('userName, userRole, userDept')
-          .eq('userLoginID', username)
-          .single();
-
-        if (dbError || !emp) {
-          setStatusMessage({
-            type: 'error',
-            text: dbError?.message || 'AD Login succeeded, but profile not found in Portal Database.',
-          });
-          return;
-        }
-
-        // 3. Simpan data dlm localStorage
-        localStorage.setItem('userLoginID', username);
-        localStorage.setItem('userName', emp.userName);
-        localStorage.setItem('userRole', emp.userRole);
-        localStorage.setItem('userDept', emp.userDept);
-
-        // 4. Redirect ke HomePage
-        router.push('/');
-        
-      } else {
+      if (dbError || !emp) {
         setStatusMessage({
           type: 'error',
-          text: (result && result.message) || 'Invalid AD credentials.',
+          text: dbError?.message || 'AD Login succeeded, tetapi profil tidak dijumpai.',
         });
+        return;
       }
+
+      localStorage.setItem('userLoginID', username);
+      localStorage.setItem('userName', emp.userName);
+      localStorage.setItem('userRole', emp.userRole);
+      localStorage.setItem('userDept', emp.userDept);
+
+      router.push('/');
     } catch (error) {
-      // Jika masih error, ia akan masuk ke sini
       console.error('Login Error:', error);
       setStatusMessage({
         type: 'error',
-        text: 'Connection failed. Please check your network or server firewall.',
+        text: 'Sambungan gagal. Sila periksa rangkaian atau pelayan.',
       });
     } finally {
       setIsSubmitting(false);
@@ -122,7 +105,7 @@ const response = await CapacitorHttp.post({
             disabled={isSubmitting}
             className="w-full bg-red-600 hover:bg-red-700 disabled:bg-zinc-800 text-white font-black py-4 rounded-2xl uppercase text-xs tracking-widest mt-4"
           >
-            {isSubmitting ? 'Verifying Identity...' : 'Authorize Access'}
+            {isSubmitting ? 'Logging in...' : 'Login'}
           </button>
         </form>
       </div>

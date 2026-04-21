@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { QRCodeSVG } from 'qrcode.react';
 import * as XLSX from 'xlsx';
+import { toast, Toaster } from 'sonner';
 
 export default function AllAssetsPage() {
   const [assets, setAssets] = useState<any[]>([]);
@@ -23,6 +24,27 @@ export default function AllAssetsPage() {
 
   const [displayName, setDisplayName] = useState('Guest');
 
+  const confirmAction = (message: string): Promise<boolean> => {
+  return new Promise((resolve) => {
+    const result = window.confirm(message);
+    resolve(result);
+  });
+};
+
+const [userAssetsList, setUserAssetsList] = useState<any[]>([]);
+const [selectedReportIds, setSelectedReportIds] = useState<string[]>([]);
+const [loadingUserAssets, setLoadingUserAssets] = useState(false);
+
+  const [totalAssets, setTotalAssets] = useState(0);
+
+
+const checkTaggingUnique = async (tag: string, excludeId?: string): Promise<boolean> => {
+  if (!tag.trim()) return true;
+  let query = supabase.from('assets').select('id').eq('it_tagging', tag.trim().toUpperCase());
+  if (excludeId) query = query.neq('id', excludeId);
+  const { data } = await query.maybeSingle();
+  return!data;
+};
 
 const [spareSearch, setSpareSearch] = useState("");
 const [filteredSpare, setFilteredSpare] = useState<any[]>([]);
@@ -65,6 +87,8 @@ const [periSearch, setPeriSearch] = useState("");
 
 const [showReturnModal, setShowReturnModal] = useState(false);
 const [returnReason, setReturnReason] = useState('');
+
+
 
 // Filter untuk cari Peripheral yang statusnya Spare sahaja
 const filteredPeripherals = assets.filter(a => 
@@ -112,9 +136,9 @@ const exportToExcel = async () => {
       const date = new Date().toISOString().split('T')[0];
       XLSX.writeFile(workbook, `Actmax_Full_Inventory_${date}.xlsx`);
     }
-  } catch (error: any) {
-    alert("Export failed: " + error.message);
-  } finally {
+} catch (error: any) {
+  toast.error("Export failed: " + error.message);
+} finally {
     setLoading(false);
   }
 };
@@ -141,6 +165,12 @@ const getWarrantyStatus = (date: string) => {
 
 const handleAudit = async (assetId: string) => {
   const now = new Date().toISOString();
+
+  const confirmed = await confirmAction(
+    `Confirm audit ${selectedAsset?.it_tagging}?`
+  );
+  if (!confirmed) return;
+
   setLoading(true);
 
   try {
@@ -177,17 +207,24 @@ const handleAudit = async (assetId: string) => {
     // Update dalam list utama (sync state)
     setAssets((prev: any[]) => prev.map(a => a.id === assetId ? { ...a, last_audit: now } : a));
 
-    alert("Audit Timestamp Updated & Logged!");
+    toast.success("Audit Timestamp Updated & Logged!")
 
-  } catch (error: any) {
-    console.error("Audit Error:", error.message || error);
-    alert("Error updating audit: " + (error.message || "Unknown error"));
-  } finally {
+} catch (error: any) {
+  console.error("Audit Error:", error.message || error);
+  toast.error("Error updating audit: " + (error.message || "Unknown error")); // Tukar dari alert
+} finally {
     setLoading(false);
   }
 };
 const handleReturnSubmit = async () => {
   if (!selectedAsset) return;
+
+    if (!returnReason.trim()) return toast.error("Reason for return is required!");
+
+  const confirmed = await confirmAction(
+    `Confirm return ${selectedAsset.it_tagging} as ${oldAssetStatus}? This action cannot be undone.`
+  );
+  if (!confirmed) return;
 
   try {
     setLoading(true);
@@ -226,7 +263,7 @@ const handleReturnSubmit = async () => {
     }
 
     // 4. UI Feedback & Reset
-    alert(`Asset ${selectedAsset.it_tagging} has been successfully returned as ${oldAssetStatus}.`);
+    toast.success(`Asset ${selectedAsset.it_tagging} has been successfully returned as ${oldAssetStatus}.`);
     setShowReturnModal(false);
     setReturnReason('');
     
@@ -235,16 +272,23 @@ const handleReturnSubmit = async () => {
 
   } catch (error: any) {
     console.error("Error executing return:", error.message);
-    alert("Failed to return asset: " + error.message);
+    toast.error("Failed to return asset: " + error.message);
   } finally {
     setLoading(false);
   }
 };
 const handleSwapSubmit = async () => {
-  if (!swapWithAsset) return alert("Please select a replacement asset from Spare.");
+  if (!swapWithAsset) return toast.error("Please select a replacement asset from Spare.");
   const now = new Date().toISOString();
-
   const finalTag = newSpareTag || swapWithAsset.it_tagging;
+
+  const confirmed = await confirmAction(
+    `Confirm swap of ${selectedAsset.it_tagging} as ${oldAssetStatus}? This action cannot be undone.`
+  );
+  if (!confirmed) return;
+
+    const isUnique = await checkTaggingUnique(finalTag, swapWithAsset.id);
+  if (!isUnique) return toast.error(`IT Tagging "${finalTag}" already exists!`);
 
   const { error: err1 } = await supabase.from('assets').update({
     status: oldAssetStatus, 
@@ -277,14 +321,14 @@ const handleSwapSubmit = async () => {
     const { error: logError } = await supabase.from('activity_logs').insert([logData]);
     if (logError) console.error("Failed to save activity log:", logError.message);
 
-    alert("Swap Completed Successfully!");
+    toast.success("Swap Completed Successfully!");
     setShowSwapModal(false);
     setSwapWithAsset(null);
     setNewSpareTag(""); 
     setSpareSearch(""); 
-    fetchAssets();
+    fetchAssets(currentPage, search);
   } else {
-    alert("Swap Failed. Check Database.");
+    toast.error("Swap Failed. Check Database.");
   }
 };
 
@@ -292,6 +336,13 @@ const handleFixSubmit = async () => {
   const now = new Date().toISOString();
   setLoading(true);
 
+  const confirmed = await confirmAction(
+    `Confirm fix ${selectedAsset?.it_tagging}? Device will be marked as Spare.`
+  );
+  if (!confirmed) {
+    setLoading(false);
+    return;
+  }
   try {
     // 1. Update status asset utama (dari Faulty ke Spare)
     const { error: mainError } = await supabase
@@ -341,23 +392,30 @@ const handleFixSubmit = async () => {
     }
 
     // 5. UI Feedback & Reset
-    alert("Device Fixed & Returned to Spare!");
+    toast.success("Device Fixed & Returned to Spare!"); // Tukar dari alert
     setShowFixModal(false);
     setFixPeripheral(null);
     setPeriSearch("");
-    fetchAssets();
-
-} catch (error: any) { // Gunakan : any untuk bypass linting
-    console.error("Database Error:", error.message || error);
-    alert("Failed: " + (error.message || "Unknown error"));
-  } finally {
+    fetchAssets(currentPage, search);
+    
+} catch (error: any) {
+  console.error("Database Error:", error.message || error);
+  toast.error("Failed: " + (error.message || "Unknown error"));
+}
+  finally {
     setLoading(false); // Sentiasa stop loading tak kira success atau fail
   }
 };
 
 const handleIssueSubmit = async () => {
-  if (!issueData.plant || !issueData.location) return alert("Plant and Location are required.");
+  if (!issueData.plant ||!issueData.location) return toast.error("Plant and Location are required.");
+  if (!issueData.userName.trim()) return toast.error("User Name / Asset Owner is required.");
 
+  if (issueData.it_tagging) {
+    const isUnique = await checkTaggingUnique(issueData.it_tagging, selectedAsset.id);
+    if (!isUnique) return toast.error(`IT Tagging "${issueData.it_tagging}" already exists!`);
+  }
+  
   // 1. Update Asset Status dalam Table Assets
   const { error } = await supabase.from('assets').update({
     status: 'In Use',
@@ -389,14 +447,32 @@ const handleIssueSubmit = async () => {
     }
 
     // 4. Feedback & Reset UI
-    alert(`Assets ${selectedAsset.serial_number} is now IN USE`);
+    toast.success(`Assets ${selectedAsset.serial_number} is now IN USE`);
     setShowIssueModal(false);
     setEmpSearch(""); 
-    fetchAssets(); // Refresh list display
+    fetchAssets(currentPage, search); // Refresh list display
   } else {
-    alert("Error: " + error.message);
+    toast.error("Error: " + error.message);
   }
 };
+
+useEffect(() => {
+  const fetchUserAssets = async () => {
+    if (!showDetailsModal ||!selectedAsset?.userName) return;
+    setLoadingUserAssets(true);
+    const { data } = await supabase
+     .from('assets')
+     .select('id, it_tagging, serial_number, category, model')
+     .eq('userName', selectedAsset.userName)
+     .order('category', { ascending: true });
+    if (data) {
+      setUserAssetsList(data);
+      setSelectedReportIds([selectedAsset.id]); // Auto tick asset yang tengah bukak
+    }
+    setLoadingUserAssets(false);
+  };
+  fetchUserAssets();
+}, [showDetailsModal, selectedAsset?.userName]);
 
 useEffect(() => {
   const initData = async () => {
@@ -420,15 +496,18 @@ const fetchEmployees = async () => {
   if (error) console.error("Employees fetch error:", error);
 };
 
-// 3b. Function untuk tarik SEMUA spare assets (tidak pagination)
+const [isLoadingSpare, setIsLoadingSpare] = useState(false);
+
 const fetchAllSpareAssets = async () => {
+  setIsLoadingSpare(true);
   const { data, error } = await supabase
-    .from('assets')
-    .select('*')
-    .eq('status', 'Spare')
-    .order('category', { ascending: true });
+   .from('assets')
+   .select('*')
+   .eq('status', 'Spare')
+   .order('category', { ascending: true });
   if (data) setAllSpareAssets(data);
   if (error) console.error("Spare assets fetch error:", error);
+  setIsLoadingSpare(false);
 };
 
 const fetchAssets = async (page = 1, searchQuery = "") => {
@@ -447,9 +526,11 @@ const fetchAssets = async (page = 1, searchQuery = "") => {
     query = query.or(`serial_number.ilike.%${searchQuery}%,userName.ilike.%${searchQuery}%,model.ilike.%${searchQuery}%`);
   }
 
-  const { data, error } = await query;
+  const { data, error, count } = await query;
 
   if (data) setAssets(data);
+  if (count!== null) setTotalAssets(count); // <-- Tambah ni
+  if (error) toast.error("Failed to fetch assets: " + error.message);
   setLoading(false);
 };
 
@@ -463,21 +544,19 @@ useEffect(() => {
   return () => clearTimeout(timer);
 }, [search]);
 
-  const filtered = assets.filter(a => 
-    a.serial_number?.toLowerCase().includes(search.toLowerCase()) ||
-    a.userName?.toLowerCase().includes(search.toLowerCase()) ||
-    a.category?.toLowerCase().includes(search.toLowerCase()) ||
-    a.model?.toLowerCase().includes(search.toLowerCase())
-  );
 
 // Letakkan ini sebelum 'return'
-const filteredEmployees = Employees.filter(emp => 
+const filteredEmployees = Employees.filter(emp =>
   emp.userName?.toLowerCase().includes(empSearch.toLowerCase()) ||
   emp.userID?.toLowerCase().includes(empSearch.toLowerCase()) ||
   emp.staffID?.toLowerCase().includes(searchTerm)
 );
+
+const showCustomSuggestion = empSearch.length > 2 && filteredEmployees.length === 0 &&!isDeployGeneric;
+
   return (
     <div className="min-h-screen bg-[#050505] text-zinc-400 p-8">
+      <Toaster richColors position="top-right" />
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="sticky top-0 z-40 bg-[#050505]/80 backdrop-blur-md pt-2 pb-6"></div>
 {/* Header & Search */}
@@ -535,7 +614,7 @@ const filteredEmployees = Employees.filter(emp =>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-900">
-              {filtered.map(assets => (
+              {assets.map(assets => (
                 <tr 
       key={assets.id} 
       // TAMBAH LINE DI BAWAH NI
@@ -621,7 +700,7 @@ onClick={() => {
               ))}
             </tbody>
           </table>
-          {filtered.length === 0 && <div className="p-10 text-center italic text-zinc-600 uppercase">No records found.</div>}
+          {assets.length === 0 && <div className="p-10 text-center italic text-zinc-600 uppercase">No records found.</div>}
         </div>
       </div>
 
@@ -668,9 +747,9 @@ onClick={() => {
       onChange={(e) => {
         setEmpSearch(e.target.value);
         // Kalau user padam semua, reset userName dalam issueData
-        if (e.target.value === "") setIssueData(prev => ({ ...prev, userName: "" }));
-      }} 
-    />
+          setIssueData(prev => ({...prev, userName: e.target.value.trim() }));
+  }}
+/>
 
     {/* Dropdown keluar jika input ada isi DAN (tengah focus ATAU nama tak sama lagi) */}
     {isFocused && empSearch && (
@@ -696,7 +775,9 @@ onClick={() => {
             </div>
           ))
         ) : (
-          <div className="p-3 text-[10px] text-zinc-600 italic text-center uppercase tracking-widest">No match found</div>
+          <div className="p-3 text-[10px] text-zinc-500 italic text-center">
+        No employee found. <span className="text-green-500 font-bold">"{empSearch}"</span> will be used as custom name.
+      </div>
         )}
       </div>
     )}
@@ -799,29 +880,29 @@ onClick={() => {
 {/* Pagination Controls */}
 <div className="flex justify-between items-center bg-black/50 p-4 rounded-2xl border border-zinc-900 mt-4">
   <div className="text-[10px] uppercase font-bold text-zinc-600">
-    Showing Page <span className="text-white">{currentPage}</span>
+    Showing <span className="text-white">{totalAssets === 0? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1}-{Math.min(currentPage * ITEMS_PER_PAGE, totalAssets)}</span> of <span className="text-white">{totalAssets}</span>
   </div>
-  
+
   <div className="flex gap-2">
-    <button 
+    <button
       onClick={() => {
         const prevPage = Math.max(currentPage - 1, 1);
         setCurrentPage(prevPage);
-        fetchAssets(prevPage);
+        fetchAssets(prevPage, search);
       }}
       disabled={currentPage === 1}
       className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-[10px] font-black uppercase transition-all"
     >
       Previous
     </button>
-    
-    <button 
+
+    <button
       onClick={() => {
         const nextPage = currentPage + 1;
         setCurrentPage(nextPage);
-        fetchAssets(nextPage);
+        fetchAssets(nextPage, search);
       }}
-      disabled={assets.length < ITEMS_PER_PAGE}
+      disabled={currentPage * ITEMS_PER_PAGE >= totalAssets} // <-- Tukar line ni
       className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-[10px] font-black uppercase transition-all"
     >
       Next
@@ -885,19 +966,62 @@ onClick={() => {
       Print Identity Label
     </button>
 
-<button 
-  onClick={() => {
-    // Guna encodeURIComponent supaya nama yang ada space tak error kat URL
-    const safeUserName = encodeURIComponent(selectedAsset.userName || "");
-    window.open(`/it-ticketing/all-assets/user-report?user=${safeUserName}`, '_blank');
-  }} 
-  className="mt-3 flex items-center gap-2 text-[9px] font-black text-blue-500 uppercase tracking-widest hover:text-blue-400 transition-all"
->
-  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2a2 2 0 00-2-2H5a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v8m-6 0h6" />
-  </svg>
-  Generate Official User Report
-</button>
+<div className="space-y-3 pt-4 border-t border-zinc-800">
+  <div className="flex items-center justify-between">
+    <h5 className="text- font-black text-zinc-500 uppercase tracking-widest">
+      Generate Report for {selectedAsset.userName || 'UNASSIGNED'}
+    </h5>
+      <button
+    onClick={() => {
+      if (selectedReportIds.length === userAssetsList.length) setSelectedReportIds([]);
+      else setSelectedReportIds(userAssetsList.map(a => a.id));
+    }}
+    className="text-[8px] text-blue-500 hover:text-blue-400 font-bold uppercase"
+  >
+    {selectedReportIds.length === userAssetsList.length? 'Deselect All' : 'Select All'}
+  </button>
+  </div>
+
+  {loadingUserAssets? (
+    <div className="text- text-zinc-600 italic text-center py-4">Loading assets...</div>
+  ) : (
+    <div className="max-h-40 overflow-y-auto space-y-1 bg-black/40 p-3 rounded-xl border border-zinc-800">
+      {userAssetsList.map((a) => (
+        <label key={a.id} className="flex items-center gap-2 p-2 hover:bg-white/[0.03] rounded-lg cursor-pointer group">
+          <input
+            type="checkbox"
+            checked={selectedReportIds.includes(a.id)}
+            onChange={(e) => {
+              if (e.target.checked) setSelectedReportIds(prev => [...prev, a.id]);
+              else setSelectedReportIds(prev => prev.filter(id => id!== a.id));
+            }}
+            className="accent-blue-600"
+          />
+          <div className="flex-1">
+            <p className="text- font-bold text-white group-hover:text-blue-400">{a.it_tagging}</p>
+            <p className="text- text-zinc-600 font-mono">{a.category} | {a.serial_number}</p>
+          </div>
+        </label>
+      ))}
+    </div>
+  )}
+
+  <button
+    onClick={() => {
+      if (selectedReportIds.length === 0) return toast.error("Select at least 1 asset");
+      const safeUserName = encodeURIComponent(selectedAsset.userName || "");
+      const ids = selectedReportIds.join(',');
+      window.open(`/it-ticketing/all-assets/user-report?user=${safeUserName}&ids=${ids}`, '_blank');
+    }}
+    disabled={selectedReportIds.length === 0}
+    className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed text-white py-3 rounded-xl font-black uppercase text- transition-all"
+  >
+<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 002 2v4a2 0 002 2m8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+</svg>
+    Print Report ({selectedReportIds.length} items)
+  </button>
+</div>
 
   </div>
 </div>
@@ -1107,10 +1231,14 @@ onChange={(e) => {
   />
 
   {/* Dropdown Suggestions */}
-  {isSpareFocused && spareSearch && (
-    <div className="absolute z-50 w-full mt-2 bg-zinc-950 border border-zinc-800 rounded-2xl max-h-48 overflow-y-auto shadow-2xl custom-scrollbar overflow-hidden">
-      {filteredSpare.length > 0 ? (
-        filteredSpare.map((spare) => (
+{isSpareFocused && spareSearch && (
+  <div className="absolute z-50 w-full mt-2 bg-zinc-950 border border-zinc-800 rounded-2xl max-h-48 overflow-y-auto shadow-2xl custom-scrollbar overflow-hidden">
+    {isLoadingSpare? (
+      <div className="p-4 text-zinc-500 italic text-center text-[10px]">Loading spare assets...</div>
+    ) : allSpareAssets.length === 0? (
+      <div className="p-4 text-zinc-500 italic text-center text-[10px]">No spare assets in database</div>
+    ) : filteredSpare.length > 0? (
+      filteredSpare.map((spare) => (
           <div 
             key={spare.id}
             onClick={() => {
@@ -1131,7 +1259,7 @@ onChange={(e) => {
           </div>
         ))
       ) : (
-        <div className="p-4 text-zinc-600 italic text-center">No matching spare found...</div>
+          <div className="p-4 text-zinc-600 italic text-center">No matching spare found for category {selectedAsset?.category}</div>
       )}
     </div>
   )}

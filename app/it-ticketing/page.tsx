@@ -290,6 +290,278 @@ useEffect(() => {
 }, []);
 
 
+
+const InkInventorySummary = () => {
+  const [stats, setStats] = useState({
+    totalTypes: 0,
+    totalStock: 0,
+    lowStockCount: 0,
+    lastIssue: null as any
+  });
+  const [showUseModal, setShowUseModal] = useState(false);
+  const [inkList, setInkList] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      const { data: inks } = await supabase.from('ink_inventory').select('*');
+      if (!inks) return;
+
+      const totalStock = inks.reduce((sum, i) => sum + i.current_stock, 0);
+      const lowStockCount = inks.filter(i => i.current_stock <= i.low_threshold).length;
+
+      const { data: lastTx } = await supabase
+      .from('ink_transactions')
+      .select('*, ink_inventory(ink_name)')
+      .eq('type', 'OUT')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+      setStats({
+        totalTypes: inks.length,
+        totalStock,
+        lowStockCount,
+        lastIssue: lastTx
+      });
+      setInkList(inks);
+    };
+    fetchStats();
+
+    const channel = supabase.channel('ink-summary')
+   .on('postgres_changes', { event: '*', schema: 'public', table: 'ink_inventory' }, fetchStats)
+   .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ink_transactions' }, fetchStats)
+   .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Total Types */}
+        <div className="bg-zinc-900/50 border-zinc-800 p-5 rounded-2xl">
+          <p className="text- font-black text-zinc-600 uppercase tracking-widest mb-1">Total Types</p>
+          <p className="text-3xl font-black text-white">{stats.totalTypes}</p>
+          <p className="text- text-zinc-500 mt-1">SKUs in system</p>
+        </div>
+
+        {/* Total Stock */}
+        <div className="bg-zinc-900/50 border border-zinc-800 p-5 rounded-2xl">
+          <p className="text- font-black text-zinc-600 uppercase tracking-widest mb-1">Total Stock</p>
+          <p className="text-3xl font-black text-blue-500">{stats.totalStock}</p>
+          <p className="text- text-zinc-500 mt-1">Units available</p>
+        </div>
+
+        {/* Low Stock Alert */}
+        <div className={`bg-zinc-900/50 border p-5 rounded-2xl ${
+          stats.lowStockCount > 0? 'border-red-600/30' : 'border-zinc-800'
+        }`}>
+          <p className="text- font-black text-zinc-600 uppercase tracking-widest mb-1">Low Stock</p>
+          <p className={`text-3xl font-black ${stats.lowStockCount > 0? 'text-red-500' : 'text-green-500'}`}>
+            {stats.lowStockCount}
+          </p>
+          <p className="text- text-zinc-500 mt-1">Need restock</p>
+        </div>
+
+        {/* Quick Use Button */}
+        <button
+          onClick={() => setShowUseModal(true)}
+          className="bg-red-600 hover:bg-red-700 text-white p-5 rounded-2xl flex flex-col items-center justify-center transition-all active:scale-95"
+        >
+          <svg className="w-6 h-6 mb-1" fill="none" stroke="currentColor" viewBox="0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          <p className="text- font-black uppercase tracking-widest">Issue Ink</p>
+        </button>
+      </div>
+
+      {/* Last Transaction */}
+      {stats.lastIssue && (
+        <div className="bg-zinc-900/30 border-zinc-800/50 p-4 rounded-xl mt-3">
+          <p className="text- font-black text-zinc-600 uppercase tracking-widest mb-1">Last Issue</p>
+          <p className="text- text-zinc-400">
+            <span className="text-white font-bold">{stats.lastIssue.ink_inventory?.ink_name}</span> —
+            {stats.lastIssue.quantity}x to <span className="text-red-500">{stats.lastIssue.taken_by}</span> •
+            {new Date(stats.lastIssue.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+          </p>
+        </div>
+      )}
+
+      {showUseModal && (
+        <QuickIssueInkModal
+          inkList={inkList}
+          onClose={() => setShowUseModal(false)}
+        />
+      )}
+    </>
+  );
+};
+
+const QuickIssueInkModal = ({ inkList, onClose }: any) => {
+  const [searchInk, setSearchInk] = useState('');
+  const [selectedInk, setSelectedInk] = useState<any>(null);
+  const [takenBy, setTakenBy] = useState('');
+  const [qty, setQty] = useState(1);
+  const [userList, setUserList] = useState<any[]>([]);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      const { data } = await supabase
+    .from('Employees')
+    .select('userLoginID, userName')
+    .order('userName');
+      if (data) setUserList(data);
+    };
+    fetchUsers();
+  }, []);
+
+  const filteredInks = inkList.filter((i: any) =>
+    i.ink_name.toLowerCase().includes(searchInk.toLowerCase())
+  );
+
+  const filteredUsers = userList.filter(u =>
+    u.userName.toLowerCase().includes(takenBy.toLowerCase())
+  );
+
+  const handleSubmit = async () => {
+    if (!selectedInk) return alert("Select ink first");
+    if (!takenBy.trim()) return alert("Enter staff name");
+    if (qty > selectedInk.current_stock) return alert("Not enough stock!");
+
+    setLoading(true);
+    await supabase.from('ink_transactions').insert({
+      ink_id: selectedInk.id,
+      type: 'OUT',
+      quantity: qty,
+      taken_by: takenBy,
+      recorded_by: localStorage.getItem('userName')
+    });
+
+    await supabase.from('ink_inventory')
+  .update({
+      current_stock: selectedInk.current_stock - qty,
+      last_updated: new Date().toISOString()
+    })
+  .eq('id', selectedInk.id);
+
+    setLoading(false);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/90 z-[80] flex items-center justify-center p-4">
+      <div className="bg-zinc-950 border-zinc-800 rounded-3xl p-8 max-w-lg w-full max-h- overflow-y-auto">
+        <div className="flex justify-between items-start mb-6">
+          <div>
+            <h3 className="text-lg font-black text-white uppercase">Issue Ink/Toner</h3>
+            <p className="text- text-zinc-500">Select ink & record who took it</p>
+          </div>
+          <button onClick={onClose} className="text-zinc-500 hover:text-white">✕</button>
+        </div>
+
+        <div className="space-y-4">
+          {/* 1. Search Ink */}
+          <div>
+            <label className="text- font-black text-zinc-600 uppercase tracking-widest">1. Select Ink Type</label>
+            <input
+              placeholder="Search ink type..."
+              value={searchInk}
+              onChange={e => setSearchInk(e.target.value)}
+              className="w-full bg-zinc-900 border-zinc-800 rounded-xl px-4 py-3 text-sm mt-2"
+            />
+            <div className="max-h-40 overflow-y-auto mt-2 space-y-1">
+              {filteredInks.slice(0, 5).map((ink: any) => (
+                <button
+                  key={ink.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedInk(ink);
+                    setSearchInk(ink.ink_name);
+                  }}
+                  disabled={ink.current_stock === 0}
+                  className={`w-full text-left p-3 rounded-xl border transition-all ${
+                    selectedInk?.id === ink.id
+                     ? 'bg-red-600/20 border-red-600'
+                      : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700'
+                  } disabled:opacity-30`}
+                >
+                  <div className="flex justify-between">
+                    <span className="text-xs font-bold text-white">{ink.ink_name}</span>
+                    <span className={`text- font-black ${
+                      ink.current_stock <= ink.low_threshold? 'text-red-500' : 'text-green-500'
+                    }`}>
+                      {ink.current_stock} left
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 2. Taken By */}
+          <div className="relative">
+            <label className="text- font-black text-zinc-600 uppercase tracking-widest">2. Taken By</label>
+            <input
+              placeholder="Search staff name..."
+              value={takenBy}
+              onChange={e => {
+                setTakenBy(e.target.value);
+                setShowUserDropdown(true);
+              }}
+              onFocus={() => setShowUserDropdown(true)}
+              onBlur={() => setTimeout(() => setShowUserDropdown(false), 150)}
+              className="w-full bg-zinc-900 border-zinc-800 rounded-xl px-4 py-3 text-sm mt-2"
+            />
+
+            {showUserDropdown && takenBy && filteredUsers.length > 0 && (
+              <div className="absolute z-40 w-full bg-zinc-950 border-zinc-800 rounded-xl mt-1 max-h-40 overflow-y-auto shadow-2xl">
+                {filteredUsers.slice(0, 8).map((user) => (
+                  <button
+                    key={user.userLoginID}
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setTakenBy(user.userName);
+                      setShowUserDropdown(false);
+                    }}
+                    className="w-full text-left px-4 py-2.5 text-sm hover:bg-zinc-800 transition-colors border-b border-zinc-900 last:border-0"
+                  >
+                    <p className="text-white font-bold">{user.userName}</p>
+                    <p className="text- text-zinc-500 font-mono">{user.userLoginID}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 3. Quantity */}
+          <div>
+            <label className="text- font-black text-zinc-600 uppercase tracking-widest">3. Quantity</label>
+            <input
+              type="number"
+              value={qty}
+              onChange={e => setQty(Number(e.target.value))}
+              min="1"
+              max={selectedInk?.current_stock || 1}
+              className="w-full bg-zinc-900 border-zinc-800 rounded-xl px-4 py-3 text-sm mt-2"
+            />
+          </div>
+        </div>
+
+        {/* Submit Button - Sentiasa nampak */}
+        <button
+          onClick={handleSubmit}
+          disabled={loading ||!selectedInk ||!takenBy.trim()}
+          className="w-full bg-red-600 hover:bg-red-700 text-white py-4 rounded-xl font-black uppercase text- tracking-widest transition-all disabled:opacity-30 mt-6"
+        >
+          {loading? 'Recording...' : 'Record Usage'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const activeAlerts = (() => {
   // A. Tapis Network & CCTV yang Offline/Broken
   const hardwareIssues = masterAssets
@@ -619,57 +891,7 @@ const filteredAssets = (masterAssets || []).filter((assets) => {
         {(isAdmin || isSupport) && (
           <div className="mt-12 space-y-8 animate-in fade-in duration-700">
             
-{/* 1. PROACTIVE ALERT SYSTEM - INTEGRATED MONITORING */}
-<div className="space-y-4">
-  <div className="flex items-center gap-2">
-    <span className="relative flex h-2 w-2">
-      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-600"></span>
-    </span>
-    <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-red-500">
-      Critical Monitoring ({activeAlerts.length})
-    </h2>
-  </div>
-
-  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-    {activeAlerts.length > 0 ? (
-      activeAlerts.map((alert) => (
-        <div key={alert.id} className={`bg-zinc-900/50 border ${alert.color === 'red' ? 'border-red-900/30' : 'border-orange-900/30'} p-4 rounded-2xl flex items-center justify-between group hover:border-zinc-700 transition-all`}>
-          <div className="flex items-center gap-4">
-            <div className={`text-xl ${alert.color === 'red' ? 'animate-pulse' : ''}`}>
-              {alert.icon}
-            </div>
-            <div>
-              <h4 className={`text-xs font-black uppercase ${alert.color === 'red' ? 'text-red-400' : 'text-orange-400'}`}>
-                {alert.title}
-              </h4>
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-tight">
-                {alert.desc}
-              </p>
-            </div>
-          </div>
-          
-          <button 
-            onClick={() => setSearchAsset(alert.tag)}
-            className={`px-3 py-1.5 rounded-lg text-[9px] font-black uppercase tracking-widest text-white transition-all shadow-lg active:scale-95 ${
-              alert.color === 'red' ? 'bg-red-600 hover:bg-red-500' : 'bg-orange-600 hover:bg-orange-500'
-            }`}
-          >
-            Locate
-          </button>
-        </div>
-      ))
-    ) : (
-      <div className="col-span-2 p-10 bg-zinc-900/10 border border-zinc-900 rounded-3xl text-center border-dashed">
-        <p className="text-[10px] text-zinc-600 font-black uppercase tracking-[0.4em]">
-          🛡️ CCTV, Network & Software: All Systems Nominal
-        </p>
-      </div>
-    )}
-  </div>
-</div>
-
-{/* 2. ASSET QUICK LOOK (CATEGORY) */}
+{/* 1. ASSET QUICK LOOK (CATEGORY) */}
 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-8 gap-3">
   {assetCategories.map((cat) => {
     // Pecahkan "113 (0)" kepada ["113", "(0)"]
@@ -701,7 +923,7 @@ const filteredAssets = (masterAssets || []).filter((assets) => {
   })}
 </div>
             
-{/* 3. MASTER ASSET LIST */}
+{/* 2. MASTER ASSET LIST */}
 <div className="bg-zinc-900/50 border border-zinc-900 rounded-[2.5rem] overflow-hidden shadow-2xl">
 <div className="p-6 border-b border-zinc-900 flex flex-col md:flex-row md:items-center justify-between gap-4">
   <div>
@@ -835,6 +1057,40 @@ const filteredAssets = (masterAssets || []).filter((assets) => {
 </div> {/* Tutup Master Asset Inventory Box */}
           </div>
         )}
+
+{/* 3. INK/TONER INVENTORY MONITORING - SUMMARY MODE */}
+<div className="space-y-4">
+  <div className="flex items-center justify-between">
+    <div className="flex items-center gap-2">
+      <span className="relative flex h-2 w-2">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+        <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-600"></span>
+      </span>
+      <h2 className="text-[10px] font-black uppercase tracking-[0.3em] text-blue-500">
+        Ink & Toner Inventory
+      </h2>
+    </div>
+    <div className="flex gap-2">
+      <button
+        onClick={() => router.push('/it-ticketing/ink-usage')}
+        className="text-[9px] font-black text-red-500 hover:text-white uppercase tracking-widest border-red-600/30 px-3 py-1.5 rounded-lg"
+      >
+        Issue Log →
+      </button>
+      <button
+        onClick={() => router.push('/it-ticketing/ink-management')}
+        className="text-[9px] font-black text-zinc-500 hover:text-white uppercase tracking-widest border-zinc-800 px-3 py-1.5 rounded-lg"
+      >
+        Manage Stock →
+      </button>
+    </div>
+  </div>
+
+  <InkInventorySummary />
+
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  </div>
+</div>
 
 {/* Tickets Table Header */}
 <div className="p-6 border-b border-zinc-900 flex flex-col md:flex-row md:items-center justify-between gap-4">

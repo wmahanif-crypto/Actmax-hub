@@ -7,32 +7,35 @@ import { Suspense } from 'react';
 function UserReportContent() {
   const searchParams = useSearchParams();
   const rawUser = searchParams.get('user');
-  const userName = rawUser ? decodeURIComponent(rawUser) : null;
+  const userName = rawUser? decodeURIComponent(rawUser) : null;
+  const assetIds = searchParams.get('ids')?.split(',').filter(Boolean); // <-- Tambah ni
   
   const [userAssets, setUserAssets] = useState<any[]>([]);
   const [employeeData, setEmployeeData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-
-  
   useEffect(() => {
     const fetchFullReportData = async () => {
       if (!userName) return;
       setLoading(true);
 
-      // 1. Tarik Data Assets
-      const { data: assets, error: assetErr } = await supabase
-        .from('assets')
-        .select('*')
-        .eq('userName', userName)
-        .order('category', { ascending: true });
+      // 1. Tarik Data Assets - ikut ids kalau ada, kalau tak ikut userName
+      let assetQuery = supabase.from('assets').select('*');
 
-      // 2. Tarik Data Employee details (Guna huruf kecil 'employees')
+      if (assetIds && assetIds.length > 0) {
+        assetQuery = assetQuery.in('id', assetIds); // <-- Guna ni kalau ada ids
+      } else {
+        assetQuery = assetQuery.eq('userName', userName); // <-- Fallback ke behavior lama
+      }
+
+      const { data: assets, error: assetErr } = await assetQuery.order('category', { ascending: true });
+
+      // 2. Tarik Data Employee details - still guna userName
       const { data: emp, error: empErr } = await supabase
-        .from('Employees') 
-        .select('*')
-        .ilike('userName', userName) // Guna ilike supaya tak kisah huruf besar/kecil
-        .maybeSingle(); // maybeSingle elakkan error kalau data takde
+       .from('Employees') 
+       .select('*')
+       .ilike('userName', userName)
+       .maybeSingle();
 
       if (assetErr) console.error("Asset Error:", assetErr.message);
       if (empErr) console.error("Employee Error:", empErr.message);
@@ -44,7 +47,7 @@ function UserReportContent() {
     };
 
     fetchFullReportData();
-  }, [userName]);
+  }, [userName, searchParams]);
 
   // Tarikh hari ini format DD/MM/YYYY
   const todayDate = new Date().toLocaleDateString('en-GB');
@@ -125,7 +128,6 @@ function UserReportContent() {
           </td>
         </tr>
       ))}
-      {/* Table blank dah dibuang, table akan auto-cut kat sini */}
     </tbody>
   </table>
 </section>
@@ -169,29 +171,73 @@ function UserReportContent() {
         </button>
       </div>
 
+      {/* Footer Page Number - Print only */}
+<div className="hidden print:block fixed bottom-5 w-full text-center text- text-zinc-500 font-mono">
+  Page <span className="pageNumber"></span> of <span className="totalPages"></span>
+</div>
+
 <style jsx global>{`
   @media print {
-    @page { 
-      size: A4; 
-      margin: 10mm; /* Kurangkan margin kertas dari 15mm ke 10mm */
+    /*... CSS yang atas tadi... */
+
+    @page {
+      size: A4;
+      margin: 10mm;
+      @bottom-center {
+        content: "Page " counter(page) " of " counter(pages);
+        font-size: 9px;
+        color: #666;
+      }
     }
-    body { 
-      background: white !important; 
-      -webkit-print-color-adjust: exact; 
+  }
+`}</style>
+
+<style jsx global>{`
+  @media print {
+    @page {
+      size: A4;
+      margin: 10mm;
     }
-    .max-w-\[210mm\] {
-      width: 98% !important;
-      padding: 0 !important;
-      margin: 0 !important;
+    body {
+      background: white!important;
+      -webkit-print-color-adjust: exact;
     }
-    /* Elakkan table pecah page */
-    table { page-break-inside: auto; }
-    tr { page-break-inside: avoid; page-break-after: auto; }
+   .max-w-\[210mm\] {
+      width: 100%!important;
+      padding: 0!important;
+      margin: 0!important;
+      box-shadow: none!important;
+      border: none!important;
+    }
+    /* KUNCI 1: Repeat header setiap page */
+    thead {
+      display: table-header-group;
+    }
+    tfoot {
+      display: table-footer-group;
+    }
+    /* KUNCI 2: Jangan pecah row tengah2 */
+    tr {
+      page-break-inside: avoid;
+    }
+    table {
+      page-break-inside: auto;
+    }
+    /* KUNCI 3: Section jangan pecah */
+    section {
+      page-break-inside: avoid;
+    }
+    /* Sembunyikan button print */
+   .print\:hidden {
+      display: none!important;
+    }
   }
 `}</style>
     </div>
   );
 }
+
+
 
 export default function UserReportPage() {
   return (
